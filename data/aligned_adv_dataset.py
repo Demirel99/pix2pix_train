@@ -2,13 +2,19 @@
 import os
 from data.base_dataset import BaseDataset, get_transform
 from PIL import Image
-import torchvision.datasets as datasets # <-- Import datasets
+import torchvision.datasets as datasets
+import torchvision.transforms as transforms
+from torchvision.transforms import functional as F
+import random
 
 class AlignedAdvDataset(BaseDataset):
     """
-    This dataset class loads paired images from two directories using torchvision.datasets.ImageFolder.
+    This dataset class loads paired images from two directories.
     It is designed for the adversarial -> clean image task and assumes an ImageNet-style folder structure.
-    It requires that the file structures (subdirectories and filenames) of the two directories are identical.
+    It requires that the file structures (subdirectories and filenames) of the two directories are IDENTICAL.
+
+    This version uses a robust pairing method and ensures that random augmentations (crop, flip)
+    are applied identically to both images in a pair to maintain alignment.
 
     It will be hosted at '/data/aligned_adv_dataset.py'.
     """
@@ -25,56 +31,71 @@ class AlignedAdvDataset(BaseDataset):
             opt (Option class) -- stores all the experiment flags; needs to be a subclass of BaseOptions
         """
         BaseDataset.__init__(self, opt)
-        self.dir_A = opt.dataroot_A  # path for domain A (adversarial)
-        self.dir_B = opt.dataroot_B  # path for domain B (clean)
+        self.dir_A = os.path.abspath(opt.dataroot_A)
+        self.dir_B = os.path.abspath(opt.dataroot_B)
 
-        print(f"Loading images from domain A: {self.dir_A}")
-        print(f"Loading images from domain B: {self.dir_B}")
-
-        # --- Use the robust ImageFolder to find all images ---
+        print(f"Scanning for images in source domain A: {self.dir_A}")
         dataset_A = datasets.ImageFolder(self.dir_A)
-        dataset_B = datasets.ImageFolder(self.dir_B)
+        self.A_paths = sorted([path for path, _ in dataset_A.imgs])
 
-        # Extract the file paths from the ImageFolder object
-        # The .imgs attribute is a list of (path, class_index) tuples. We only need the path.
-        self.A_paths = [path for path, _ in dataset_A.imgs]
-        self.B_paths = [path for path, _ in dataset_B.imgs]
-
-        # --- Critical Sanity Check ---
-        # Ensure both datasets have the same number of images. Since ImageFolder sorts
-        # subdirectories and files alphabetically, the lists should be perfectly aligned.
-        assert len(self.A_paths) == len(self.B_paths), \
-            f"Mismatch in dataset size. Dataset A has {len(self.A_paths)} images, " \
-            f"but Dataset B has {len(self.B_paths)} images. Please check the directories."
-
-        self.A_size = len(self.A_paths)
-        if self.A_size == 0:
+        if not self.A_paths:
             raise(RuntimeError(f"Found 0 images in: {self.dir_A}. Please check the path and data format."))
 
-        self.transform = get_transform(self.opt)
+        print(f"Deriving corresponding paths for target domain B: {self.dir_B}")
+        self.B_paths = [os.path.join(self.dir_B, os.path.relpath(p, self.dir_A)) for p in self.A_paths]
+
+        if not os.path.exists(self.B_paths[0]):
+            raise FileNotFoundError(
+                f"\nCRITICAL ERROR: Dataset mismatch detected!\n"
+                f"Path in domain A: '{self.A_paths[0]}'\n"
+                f"Derived path in B does not exist: '{self.B_paths[0]}'\n\n"
+                f"Please ensure directory structures and filenames are IDENTICAL."
+            )
+
+        self.A_size = len(self.A_paths)
+        print(f"Successfully paired {self.A_size} images.")
+
+        # We will not use the generic get_transform directly.
+        # Instead, we will construct the logic in __getitem__ to ensure sync.
 
     def __getitem__(self, index):
         """Return a data point and its metadata information.
-
-        Parameters:
-            index - - a random integer for data indexing
-
-        Returns a dictionary that contains A, B, A_paths, B_paths
-            A (tensor) - - an image in the input domain (adversarial)
-            B (tensor) - - its corresponding image in the target domain (clean)
-            A_paths (str) - - image paths
-            B_paths (str) - - image paths
+        This version implements synchronized random augmentations.
         """
-        # Get the aligned paths from our pre-compiled lists
         A_path = self.A_paths[index % self.A_size]
         B_path = self.B_paths[index % self.A_size]
         
         A_img = Image.open(A_path).convert('RGB')
         B_img = Image.open(B_path).convert('RGB')
 
-        # Apply the same transform to both images for alignment
-        A = self.transform(A_img)
-        B = self.transform(B_img)
+        # --- 1. Apply synchronized transformations ---
+        
+        # Resize
+        A_img = A_img.resize((self.opt.load_size, self.opt.load_size), Image.BICUBIC)
+        B_img = B_img.resize((self.opt.load_size, self.opt.load_size), Image.BICUBIC)
+
+        # Random crop (get parameters once, apply to both)
+        if self.opt.isTrain:
+            i, j, h, w = transforms.RandomCrop.get_params(
+                A_img, output_size=(self.opt.crop_size, self.opt.crop_size))
+            A_img = F.crop(A_img, i, j, h, w)
+            B_img = F.crop(B_img, i, j, h, w)
+
+            # Random horizontal flip (make one decision, apply to both)
+            if random.random() > 0.5:
+                A_img = F.hflip(A_img)
+                B_img = F.hflip(B_img)
+        
+        # --- 2. Convert to tensor and normalize ---
+        
+        # ToTensor
+        A = F.to_tensor(A_img)
+        B = F.to_tensor(B_img)
+        
+        # Normalize
+        normalize = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        A = normalize(A)
+        B = normalize(B)
 
         return {'A': A, 'B': B, 'A_paths': A_path, 'B_paths': B_path}
 

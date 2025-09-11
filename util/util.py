@@ -2,6 +2,7 @@
 import numpy as np
 from PIL import Image
 import os
+import torch  # <-- ADDED: This import is necessary for tensor2im to work correctly
 
 def tensor2im(input_image, imtype=np.uint8):
     """"Converts a Tensor array into a numpy image array.
