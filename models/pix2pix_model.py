@@ -65,8 +65,15 @@ class Pix2PixModel(BaseModel):
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)  # move to the device for custom loss
             self.criterionL1 = torch.nn.L1Loss()
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
-            self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
-            self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
+            # Define learning rates
+            lr_g = opt.lr
+            lr_d = opt.lr * 0.5  # Make the discriminator learn slower
+
+            print(f"Using learning rate G: {lr_g}, D: {lr_d}") # Good practice to print this
+
+            # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
+            self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=lr_g, betas=(opt.beta1, 0.999))
+            self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=lr_d, betas=(opt.beta1, 0.999))
             self.optimizers.append(self.optimizer_G)
             self.optimizers.append(self.optimizer_D)
 
