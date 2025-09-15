@@ -67,7 +67,7 @@ class Pix2PixModel(BaseModel):
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
             # Define learning rates
             lr_g = opt.lr
-            lr_d = opt.lr * 0.5  # Make the discriminator learn slower
+            lr_d = opt.lr * 0.1  # Make the discriminator learn slower
 
             print(f"Using learning rate G: {lr_g}, D: {lr_d}") # Good practice to print this
 
